@@ -1,0 +1,107 @@
+# sets of instructions to docker on which images and containers to start when starting application
+# for mongodb, we need to use a replica set image in order to use transactions
+# pulling the mongodb image from this replica set yml: https://github.com/bitnami/containers/blob/main/bitnami/mongodb/docker-compose-replicaset.yml
+
+# after docker-compose up, we need to specify Dockerfile for each microservice app to run each of their own app.
+# now build the docker using docker-compose up --build -V, -V means to reset all volumes
+services:
+  orders:
+    build:
+      context: . # where in our directory we want to start the build from
+      dockerfile: ./apps/orders/Dockerfile # specify dockerfile to list instructions on how to build the orders service
+      target: development # which part of the docker image we want to use in this docker-compose
+    command: npm run start:dev orders # override the command in Dockerfile with this new one
+    env_file:
+      - ./apps/orders/.env
+    depends_on: # the list of services needed to start before starting the orders services
+      - mongodb-primary
+      - mongodb-secondary
+      - mongodb-arbiter
+      - billing # wait until billing app / service starts
+      - auth # wait until auth app / service starts
+      - rabbitmq # wait until rabbitmq service starts
+    volumes: # 
+      - .:/usr/src/app # mount everything in the orders dir to the working directory in the image filesystem
+      - /usr/src/app/node_modules # specify that we want only the node_modules in the image filesystem
+    ports:
+      - '3000:3000'
+  
+  billing:
+    build:
+      context: . # where in our directory we want to start the build from
+      dockerfile: ./apps/billing/Dockerfile # specify dockerfile to list instructions on how to build the billing service
+      target: development # which part of the docker image we want to use in this docker-compose
+    command: npm run start:dev billing # override the command in Dockerfile with this new one
+    env_file:
+      - ./apps/billing/.env
+    depends_on: # the list of services needed to start before starting the billing services
+      - mongodb-primary
+      - mongodb-secondary
+      - mongodb-arbiter
+      - auth # wait until auth app / service starts
+      - rabbitmq # wait until rabbitmq service starts
+    volumes: # 
+      - .:/usr/src/app # mount everything in the orders dir to the working directory in the image filesystem
+      - /usr/src/app/node_modules # specify that we want only the node_modules in the image filesystem
+  
+  auth:
+    build:
+      context: . # where in our directory we want to start the build from
+      dockerfile: ./apps/auth/Dockerfile # specify dockerfile to list instructions on how to build the auth service
+      target: development # which part of the docker image we want to use in this docker-compose
+    command: npm run start:dev auth # override the command in Dockerfile with this new one
+    env_file:
+      - ./apps/auth/.env
+    depends_on: # the list of services needed to start before starting the auth services
+      - mongodb-primary
+      - mongodb-secondary
+      - mongodb-arbiter
+      - rabbitmq
+    volumes: # 
+      - .:/usr/src/app # mount everything in the orders dir to the working directory in the image filesystem
+      - /usr/src/app/node_modules # specify that we want only the node_modules in the image filesystem
+    ports:
+      - '3001:3001'
+
+  rabbitmq:
+    image: rabbitmq
+    ports:
+      - '5672:5672' # exposed to the container and the host machine
+
+  mongodb-primary: # this bitnami replica set is not supported in M1 and above chips, hence why connection refused
+    image: docker.io/bitnami/mongodb:7.0
+    environment:
+      - MONGODB_ADVERTISED_HOSTNAME=mongodb-primary
+      - MONGODB_REPLICA_SET_MODE=primary
+      - MONGODB_ROOT_PASSWORD=password123
+      - MONGODB_REPLICA_SET_KEY=replicasetkey123
+    volumes:
+      - 'mongodb_master_data:/bitnami/mongodb'
+    ports:
+    - '27017:27017' # use local port 27017 and map it to host machine port 27017
+
+  mongodb-secondary:
+    image: docker.io/bitnami/mongodb:7.0
+    depends_on:
+      - mongodb-primary
+    environment:
+      - MONGODB_ADVERTISED_HOSTNAME=mongodb-secondary
+      - MONGODB_REPLICA_SET_MODE=secondary
+      - MONGODB_INITIAL_PRIMARY_HOST=mongodb-primary
+      - MONGODB_INITIAL_PRIMARY_ROOT_PASSWORD=password123
+      - MONGODB_REPLICA_SET_KEY=replicasetkey123
+
+  mongodb-arbiter:
+    image: docker.io/bitnami/mongodb:7.0
+    depends_on:
+      - mongodb-primary
+    environment:
+      - MONGODB_ADVERTISED_HOSTNAME=mongodb-arbiter
+      - MONGODB_REPLICA_SET_MODE=arbiter
+      - MONGODB_INITIAL_PRIMARY_HOST=mongodb-primary
+      - MONGODB_INITIAL_PRIMARY_ROOT_PASSWORD=password123
+      - MONGODB_REPLICA_SET_KEY=replicasetkey123
+
+volumes:
+  mongodb_master_data:
+    driver: local
